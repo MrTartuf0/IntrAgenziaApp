@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intr_agenzia_app/io/dio_interceptor.dart';
 import 'package:intr_agenzia_app/io/secure_storage_handler.dart';
 import 'package:pretty_dio_logger/pretty_dio_logger.dart';
 import 'package:top_snackbar_flutter/top_snack_bar.dart';
@@ -29,46 +30,6 @@ class _LoginScreenState extends State<LoginScreen> {
     _dio.interceptors.add(
       PrettyDioLogger(requestHeader: true, responseHeader: true),
     );
-  }
-
-  Future<void> _login() async {
-    try {
-      final response = await _dio.post(
-        'https://intragenzia.adisu.umbria.it/user/login',
-        options: Options(
-          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-          followRedirects: false,
-          validateStatus: (status) => true,
-        ),
-        data: {
-          'name': _emailController.text,
-          'pass': _passwordController.text,
-          'form_id': 'user_login_form',
-        },
-      );
-
-      if (response.headers['set-cookie'] == null) {
-        print("BRO MANCANO I BISCOTTI, vai a comprare le gocciole");
-        showTopSnackBar(
-          Overlay.of(context),
-          CustomSnackBar.error(message: "Credenziali errate."),
-        );
-      } else {
-        final cookie = response.headers['set-cookie']![0].split(';')[0];
-        SecureStorageService().saveCredentials(
-          email: _emailController.text,
-          password: _passwordController.text,
-          cookie: cookie,
-        );
-
-        context.go('/home');
-      }
-    } catch (e) {
-      showTopSnackBar(
-        Overlay.of(context),
-        CustomSnackBar.error(message: e.toString()),
-      );
-    }
   }
 
   @override
@@ -110,7 +71,13 @@ class _LoginScreenState extends State<LoginScreen> {
                 width: double.infinity,
                 height: 45,
                 child: ElevatedButton(
-                  onPressed: _login,
+                  onPressed: () {
+                    login(
+                      _emailController.text,
+                      _passwordController.text,
+                      context,
+                    );
+                  },
                   child: const Text('Login'),
                 ),
               ),
