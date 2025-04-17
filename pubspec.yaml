@@ -41,6 +41,7 @@ dependencies:
   provider: ^6.1.4
   top_snackbar_flutter: ^3.2.0
   html: ^0.15.5+1
+  pretty_dio_logger: ^1.4.0
 
 dev_dependencies:
   flutter_test:
