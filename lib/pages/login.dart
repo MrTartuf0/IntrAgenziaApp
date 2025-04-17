@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intr_agenzia_app/io/dio_interceptor.dart';
 import 'package:intr_agenzia_app/io/secure_storage_handler.dart';
 import 'package:pretty_dio_logger/pretty_dio_logger.dart';
 import 'package:top_snackbar_flutter/top_snack_bar.dart';
 import 'package:top_snackbar_flutter/custom_snack_bar.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({Key? key}) : super(key: key);
+  const LoginScreen({super.key});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -64,7 +63,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
         context.go('/home');
       }
-    } catch (e) {}
+    } catch (e) {
+      showTopSnackBar(
+        Overlay.of(context),
+        CustomSnackBar.error(message: e.toString()),
+      );
+    }
   }
 
   @override
