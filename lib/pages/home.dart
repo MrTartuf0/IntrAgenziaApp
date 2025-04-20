@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intr_agenzia_app/io/secure_storage_handler.dart';
 import 'package:intr_agenzia_app/scraper/menu_node.dart';
 import 'package:intr_agenzia_app/scraper/username.dart';
 import 'package:intr_agenzia_app/widgets/menu_list_tile.dart'; // update path accordingly
@@ -131,8 +132,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
               Center(
                 child: ElevatedButton(
-                  onPressed: () {
-                    context.go('/auth');
+                  onPressed: () async {
+                    await SecureStorageService().delete('user_cookie');
+                    context.go('/login');
                   },
                   child: const Text('Logout'),
                 ),

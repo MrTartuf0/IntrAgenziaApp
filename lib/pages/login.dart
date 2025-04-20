@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
 import 'package:intr_agenzia_app/io/dio_interceptor.dart';
 import 'package:intr_agenzia_app/io/secure_storage_handler.dart';
-import 'package:pretty_dio_logger/pretty_dio_logger.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -65,8 +64,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 width: double.infinity,
                 height: 45,
                 child: ElevatedButton(
-                  onPressed: () {
-                    CookieInterceptor.login(
+                  onPressed: () async {
+                    await CookieInterceptor.login(
                       _emailController.text,
                       _passwordController.text,
                       context,

@@ -1,6 +1,5 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:html/parser.dart';
 import 'package:intr_agenzia_app/io/secure_storage_handler.dart';
 import 'package:intr_agenzia_app/router.dart';
