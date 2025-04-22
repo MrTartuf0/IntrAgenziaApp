@@ -89,6 +89,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.wb_sunny,
                 iconColor: Colors.orangeAccent,
                 enabled: todayLaunchPName.isNotEmpty,
+                nodeID: todayLaunchPNode,
               ),
 
               const Gap(12),
@@ -98,6 +99,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.nightlight_round,
                 iconColor: Colors.purple,
                 enabled: todayDinnerPName.isNotEmpty,
+                nodeID: todayDinnerPNode,
               ),
 
               const Gap(24),
@@ -115,6 +117,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.wb_sunny,
                 iconColor: Colors.orangeAccent,
                 enabled: tomorrowLaunchPName.isNotEmpty,
+                nodeID: tomorrowLaunchPNode,
               ),
 
               const Gap(12),
@@ -124,6 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.nightlight_round,
                 iconColor: Colors.purple,
                 enabled: tomorrowDinnerPName.isNotEmpty,
+                nodeID: tomorrowDinnerPNode,
               ),
 
               const Gap(24),

@@ -2,18 +2,18 @@ import 'package:flutter/material.dart';
 
 class MenuListTile extends StatelessWidget {
   final String title;
+  final String nodeID;
   final IconData icon;
   final Color iconColor;
   final bool enabled;
-  final VoidCallback? onTap;
 
   const MenuListTile({
     super.key,
     required this.title,
+    required this.nodeID,
     required this.icon,
     required this.iconColor,
     this.enabled = true,
-    this.onTap,
   });
 
   @override
@@ -31,7 +31,12 @@ class MenuListTile extends StatelessWidget {
         style: const TextStyle(fontWeight: FontWeight.bold),
       ),
       trailing: const Icon(Icons.chevron_right),
-      onTap: enabled ? onTap : null,
+      onTap:
+          enabled
+              ? () {
+                print('Tapped nodeID: $nodeID');
+              }
+              : null,
     );
   }
 }

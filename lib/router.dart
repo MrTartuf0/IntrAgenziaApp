@@ -8,7 +8,6 @@ final GoRouter appRouter = GoRouter(
   initialLocation: '/',
   redirect: (BuildContext context, GoRouterState state) async {
     final cookie = await SecureStorageService().getCookie();
-
     final isLoggedIn = cookie != null && cookie.isNotEmpty;
     final isAtLogin = state.uri.path == '/login' || state.uri.path == '/';
 

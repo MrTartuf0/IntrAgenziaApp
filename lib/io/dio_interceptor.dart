@@ -79,7 +79,7 @@ class CookieInterceptor extends Interceptor {
         );
       } else {
         final cookie = response.headers['set-cookie']![0].split(';')[0];
-        SecureStorageService().saveCredentials(
+        await SecureStorageService().saveCredentials(
           email: email,
           password: password,
           cookie: cookie,
