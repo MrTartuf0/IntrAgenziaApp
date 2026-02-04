@@ -1,62 +1,18 @@
 import json
 import re
-import httpx
-from bs4 import BeautifulSoup
+import asyncio
 from datetime import date, timedelta
-from typing import List, Dict
+from typing import List, Dict, Optional
+from playwright.async_api import async_playwright, Page
 
 from app.settings import settings
 from app.redis_client import redis_client
 
+# --- CONFIGURAZIONE ---
 BASE_URL = "https://intragenzia.adisu.umbria.it"
 LOGIN_URL = f"{BASE_URL}/user/login"
 MENU_TODAY = f"{BASE_URL}/menu-odierni"
 MENU_TOMORROW = f"{BASE_URL}/menu-domani"
-
-
-async def login(client: httpx.AsyncClient):
-    resp = await client.get(LOGIN_URL)
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    form_build_id = soup.find("input", {"name": "form_build_id"})["value"]
-    form_id = soup.find("input", {"name": "form_id"})["value"]
-
-    payload = {
-        "name": settings.MENU_USERNAME,
-        "pass": settings.MENU_PASSWORD,
-        "form_build_id": form_build_id,
-        "form_id": form_id,
-        "op": "Log in",
-    }
-
-    await client.post(LOGIN_URL, data=payload)
-
-
-async def fetch_pascoli_nodes(client: httpx.AsyncClient):
-    urls = [MENU_TODAY, MENU_TOMORROW]
-    node_list = ["", "", "", ""]  # today lunch/dinner, tomorrow lunch/dinner
-
-    for i, url in enumerate(urls):
-        resp = await client.get(url)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        anchors = soup.select("div.view-menu a")
-
-        lunch_found = False
-        dinner_found = False
-
-        for a in anchors:
-            text = a.get_text(strip=True)
-            href = a.get("href", "")
-
-            if "Mensa Pascoli" in text:
-                if "pranzo" in text.lower() and not lunch_found:
-                    node_list[i * 2] = href
-                    lunch_found = True
-                elif "cena" in text.lower() and not dinner_found:
-                    node_list[i * 2 + 1] = href
-                    dinner_found = True
-
-    return node_list
 
 CATEGORY_MAP = {
     "Primi piatti": "primi_piatti",
@@ -69,79 +25,201 @@ CATEGORY_MAP = {
 NUMERIC_ID = re.compile(r"^\d+$")
 
 
-def extract_dishes(html: str):
-    soup = BeautifulSoup(html, "html.parser")
+async def login(page: Page):
+    """Esegue il login al portale ADISU."""
+    print(f"Eseguendo il login per {settings.MENU_USERNAME}...")
+    await page.goto(LOGIN_URL)
+    
+    # Aspettiamo il form
+    await page.wait_for_selector('input[name="name"]')
+    
+    # Compiliamo
+    await page.fill('input[name="name"]', settings.MENU_USERNAME)
+    await page.fill('input[name="pass"]', settings.MENU_PASSWORD)
+    
+    # Inviamo (cerchiamo il bottone in modo generico ma preciso)
+    await page.click('input[id="edit-submit"], button:has-text("Log in"), input[value="Log in"]')
+    
+    # Attendiamo che la navigazione finisca
+    await page.wait_for_load_state("networkidle")
+    print("Login effettuato.")
 
-    # prenotazione già fatta
-    warning = soup.select_one(".alert.alert-warning")
-    prenotato = bool(warning and "Risulta già presente una prenotazione" in warning.get_text())
 
-    # contenitore categorie
+async def get_menu_urls(page: Page) -> List[Optional[str]]:
+    """
+    Trova gli URL dei menu per Pascoli.
+    Ritorna una lista di 4 elementi: [Pranzo Oggi, Cena Oggi, Pranzo Domani, Cena Domani].
+    """
+    urls = [None, None, None, None] # slots: [today_L, today_D, tomorrow_L, tomorrow_D]
+    
+    # Mappatura: (URL Pagina, Indice di partenza nella lista urls)
+    pages_to_check = [(MENU_TODAY, 0), (MENU_TOMORROW, 2)]
+    
+    for page_url, start_idx in pages_to_check:
+        print(f"Cercando link menu in: {page_url}")
+        await page.goto(page_url)
+        
+        # Trova tutti i link dentro la vista menu
+        links = page.locator("div.view-menu a")
+        count = await links.count()
+        
+        for i in range(count):
+            link = links.nth(i)
+            text = await link.text_content()
+            href = await link.get_attribute("href")
+            
+            if not text or not href:
+                continue
+
+            # Filtriamo per Mensa Pascoli
+            if "Mensa Pascoli" in text:
+                full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
+                text_lower = text.lower()
+                
+                if "pranzo" in text_lower:
+                    urls[start_idx] = full_url
+                elif "cena" in text_lower:
+                    urls[start_idx + 1] = full_url
+                    
+    return urls
+
+
+async def parse_menu_page(page: Page, url: str) -> tuple[Dict, bool]:
+    """
+    Visita la pagina di un singolo pasto ed estrae i piatti e lo stato prenotazione.
+    """
+    print(f"Parsing menu: {url}")
+    await page.goto(url)
+    
+    # 1. Controllo se c'è già una prenotazione
+    # Cerchiamo l'alert warning
+    warning_loc = page.locator(".alert.alert-warning")
+    prenotato = False
+    if await warning_loc.count() > 0:
+        msg = await warning_loc.text_content()
+        if msg and "Risulta già presente una prenotazione" in msg:
+            prenotato = True
+
+    # 2. Estrazione piatti raggruppati per categoria
     grouped = {v: [] for v in CATEGORY_MAP.values()}
-
-    for fieldset in soup.select("fieldset"):
-        legend = fieldset.select_one(".fieldset-legend")
-        if not legend:
+    
+    # I fieldset contengono le categorie (Primi, Secondi...)
+    fieldsets = page.locator("fieldset")
+    fs_count = await fieldsets.count()
+    
+    for i in range(fs_count):
+        fs = fieldsets.nth(i)
+        
+        # Leggiamo la legenda (es. "Primi piatti")
+        legend_loc = fs.locator(".fieldset-legend")
+        if await legend_loc.count() == 0:
             continue
-
-        legend_text = legend.get_text(strip=True)
-        key = CATEGORY_MAP.get(legend_text)
-        if not key:
+            
+        legend_text = (await legend_loc.text_content()).strip()
+        cat_key = CATEGORY_MAP.get(legend_text)
+        
+        if not cat_key:
             continue
-
-        for inp in fieldset.select("input[type=radio]"):
-            value = (inp.get("value") or "").strip()
-            if not NUMERIC_ID.match(value):
-                continue  # scarta STANDARD, SPECIALE, ecc.
-
-            label = fieldset.find("label", {"for": inp.get("id")})
-            name = label.get_text(strip=True) if label else None
-            if name:
-                grouped[key].append({"id": value, "nome": name})
-
+            
+        # Troviamo i radio button (i piatti)
+        radios = fs.locator("input[type=radio]")
+        r_count = await radios.count()
+        
+        for j in range(r_count):
+            radio = radios.nth(j)
+            val = await radio.get_attribute("value")
+            
+            # Scartiamo valori non numerici (es. "STANDARD")
+            if not val or not NUMERIC_ID.match(val.strip()):
+                continue
+                
+            # Troviamo il nome del piatto dalla label associata all'ID del radio
+            radio_id = await radio.get_attribute("id")
+            label_loc = fs.locator(f"label[for='{radio_id}']")
+            
+            if await label_loc.count() > 0:
+                name = (await label_loc.text_content()).strip()
+                grouped[cat_key].append({
+                    "id": val.strip(),
+                    "nome": name
+                })
+                
     return grouped, prenotato
-
-async def scrape_menu_node(client: httpx.AsyncClient, node_path: str):
-    url = node_path if node_path.startswith("http") else f"{BASE_URL}{node_path}"
-    resp = await client.get(url)
-    return extract_dishes(resp.text)
 
 
 async def scrape_and_cache_daily():
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        await login(client)
+    """
+    Funzione principale: Login -> Ottieni Link -> Scrapa Menu -> Salva in Redis
+    """
+    print("--- INIZIO SCRAPING GIORNALIERO ---")
+    async with async_playwright() as p:
+        # Usa headless=True in produzione (senza interfaccia grafica)
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        page = await context.new_page()
+        
+        try:
+            # 1. Login
+            await login(page)
+            
+            # 2. Ottieni URL per oggi e domani
+            menu_urls = await get_menu_urls(page)
+            # menu_urls struttura: [OggiLunch, OggiDinner, DomaniLunch, DomaniDinner]
+            
+            today = date.today()
+            tomorrow = today + timedelta(days=1)
+            
+            # Mappiamo gli URL alle date e tipi
+            meal_definitions = [
+                (today, "pranzo"),
+                (today, "cena"),
+                (tomorrow, "pranzo"),
+                (tomorrow, "cena")
+            ]
+            
+            # Dizionario per raccogliere i dati prima di salvare
+            # Chiave: "YYYY-MM-DD", Valore: Lista di pasti
+            results = {
+                today.isoformat(): [],
+                tomorrow.isoformat(): []
+            }
+            
+            for i, url in enumerate(menu_urls):
+                day_obj, tipo = meal_definitions[i]
+                
+                if not url:
+                    print(f"Skipping {tipo} del {day_obj}: URL non trovato.")
+                    continue
+                
+                # 3. Parsing
+                dishes, prenotato = await parse_menu_page(page, url)
+                
+                meal_data = {
+                    "data": day_obj.isoformat(),
+                    "tipo_pasto": tipo,
+                    "prenotato": prenotato,
+                    "piatti": dishes
+                }
+                
+                results[day_obj.isoformat()].append(meal_data)
+            
+            # 4. Salvataggio su Redis
+            for day_str, meals in results.items():
+                if meals:
+                    key = f"menu:{day_str}"
+                    await redis_client.set(key, json.dumps(meals))
+                    print(f"Salvato menu per {day_str} in Redis (key: {key}, {len(meals)} pasti).")
+                else:
+                    print(f"Nessun dato trovato per {day_str}.")
 
-        nodes = await fetch_pascoli_nodes(client)
-        today = date.today()
-        tomorrow = today + timedelta(days=1)
-
-        meals = [
-            (today, "pranzo", nodes[0]),
-            (today, "cena", nodes[1]),
-            (tomorrow, "pranzo", nodes[2]),
-            (tomorrow, "cena", nodes[3]),
-        ]
-
-        day_data = {today.isoformat(): [], tomorrow.isoformat(): []}
-
-        for d, meal_type, path in meals:
-            if not path:
-                continue
-          
-            dishes, prenotato = await scrape_menu_node(client, path)
-            day_data[d.isoformat()].append({
-              "data": d.isoformat(),
-              "tipo_pasto": meal_type,
-              "prenotato": prenotato,
-              "piatti": dishes
-            })
-
-        for day, content in day_data.items():
-            key = f"menu:{day}"
-            await redis_client.set(key, json.dumps(content))
-
+        except Exception as e:
+            print(f"ERRORE CRITICO DURANTE LO SCRAPING: {e}")
+        finally:
+            await browser.close()
+            print("--- FINE SCRAPING GIORNALIERO ---")
 
 async def get_cached_menu(day: date):
+    """Recupera il menu dal database Redis."""
     key = f"menu:{day.isoformat()}"
     raw = await redis_client.get(key)
     if not raw:
