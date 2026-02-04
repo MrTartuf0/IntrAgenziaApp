@@ -1,11 +1,11 @@
 import asyncio
+from datetime import date, timedelta # Aggiunto timedelta qui
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.scraper import scrape_and_cache_daily, get_cached_menu
-from datetime import date
 
 # Configuriamo lo scheduler
 scheduler = AsyncIOScheduler()
@@ -45,9 +45,7 @@ async def read_menu_today():
 
 @app.get("/menu/tomorrow")
 async def read_menu_tomorrow():
-    tomorrow = date.today() + date(1970, 1, 2) # Trick rapido o timedelta
-    # Meglio usare timedelta
-    from datetime import timedelta
+    # CORREZIONE QUI: Usiamo timedelta per aggiungere 1 giorno
     tomorrow = date.today() + timedelta(days=1)
     menu = await get_cached_menu(tomorrow)
     return {"date": tomorrow.isoformat(), "menu": menu}
