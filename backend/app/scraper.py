@@ -30,36 +30,23 @@ async def login(page: Page):
     print(f"Eseguendo il login per {settings.MENU_USERNAME}...")
     await page.goto(LOGIN_URL)
     
-    # Aspettiamo il form
     await page.wait_for_selector('input[name="name"]')
-    
-    # Compiliamo
     await page.fill('input[name="name"]', settings.MENU_USERNAME)
     await page.fill('input[name="pass"]', settings.MENU_PASSWORD)
-    
-    # Inviamo (cerchiamo il bottone in modo generico ma preciso)
     await page.click('input[id="edit-submit"], button:has-text("Log in"), input[value="Log in"]')
-    
-    # Attendiamo che la navigazione finisca
     await page.wait_for_load_state("networkidle")
     print("Login effettuato.")
 
 
 async def get_menu_urls(page: Page) -> List[Optional[str]]:
-    """
-    Trova gli URL dei menu per Pascoli.
-    Ritorna una lista di 4 elementi: [Pranzo Oggi, Cena Oggi, Pranzo Domani, Cena Domani].
-    """
-    urls = [None, None, None, None] # slots: [today_L, today_D, tomorrow_L, tomorrow_D]
-    
-    # Mappatura: (URL Pagina, Indice di partenza nella lista urls)
+    """Trova gli URL dei menu per Pascoli."""
+    urls = [None, None, None, None] # [OggiLunch, OggiDinner, DomaniLunch, DomaniDinner]
     pages_to_check = [(MENU_TODAY, 0), (MENU_TOMORROW, 2)]
     
     for page_url, start_idx in pages_to_check:
         print(f"Cercando link menu in: {page_url}")
         await page.goto(page_url)
         
-        # Trova tutti i link dentro la vista menu
         links = page.locator("div.view-menu a")
         count = await links.count()
         
@@ -71,11 +58,9 @@ async def get_menu_urls(page: Page) -> List[Optional[str]]:
             if not text or not href:
                 continue
 
-            # Filtriamo per Mensa Pascoli
             if "Mensa Pascoli" in text:
                 full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
                 text_lower = text.lower()
-                
                 if "pranzo" in text_lower:
                     urls[start_idx] = full_url
                 elif "cena" in text_lower:
@@ -84,23 +69,50 @@ async def get_menu_urls(page: Page) -> List[Optional[str]]:
     return urls
 
 
-async def parse_menu_page(page: Page, url: str) -> tuple[Dict, bool]:
+async def parse_menu_page(page: Page, url: str) -> tuple[Dict, bool, bool]:
     """
-    Visita la pagina di un singolo pasto ed estrae i piatti e lo stato prenotazione.
+    Visita la pagina di un singolo pasto.
+    Restituisce: (piatti, prenotato, prenotabile)
     """
     print(f"Parsing menu: {url}")
     await page.goto(url)
     
-    # 1. Controllo se c'è già una prenotazione
-    # Cerchiamo l'alert warning
-    warning_loc = page.locator(".alert.alert-warning")
+    # --- LOGICA ROBUSTA BASATA SULLE CLASSI CSS ---
+    prenotabile = False
+    
+    # 1. CHECK PRENOTABILE
+    # Cerchiamo il DIV che avvolge il checkbox (identificato dalla classe specifica di Drupal)
+    checkbox_wrapper = page.locator(".js-form-item-vuoi-prenotare")
+    
+    if await checkbox_wrapper.count() > 0:
+        # Leggiamo le classi CSS del contenitore come stringa
+        classes = await checkbox_wrapper.get_attribute("class") or ""
+        
+        # DEBUG: Stampiamo le classi trovate per capire cosa vede lo scraper
+        # print(f"Classi wrapper checkbox: {classes}")
+
+        # Se tra le classi C'È 'js-webform-states-hidden', il checkbox è nascosto -> NON prenotabile
+        if "js-webform-states-hidden" in classes:
+            prenotabile = False
+        else:
+            # Se la classe hidden NON c'è, il checkbox è visibile -> Prenotabile
+            prenotabile = True
+    else:
+        # Se il wrapper del checkbox non esiste proprio, non è prenotabile
+        prenotabile = False
+
+    # 2. CHECK GIÀ PRENOTATO
     prenotato = False
+    warning_loc = page.locator(".alert.alert-warning")
+    # Qui usiamo count() perché l'alert appare/scompare dal DOM, non viene solo nascosto col CSS
     if await warning_loc.count() > 0:
         msg = await warning_loc.text_content()
         if msg and "Risulta già presente una prenotazione" in msg:
             prenotato = True
+            prenotabile = False 
 
-    # 2. Estrazione piatti raggruppati per categoria
+    # --- ESTRAZIONE PIATTI ---
+    # Nota: Estraiamo tutto ciò che è nel DOM, anche se nascosto, come richiesto.
     grouped = {v: [] for v in CATEGORY_MAP.values()}
     
     # I fieldset contengono le categorie (Primi, Secondi...)
@@ -144,13 +156,9 @@ async def parse_menu_page(page: Page, url: str) -> tuple[Dict, bool]:
                     "nome": name
                 })
                 
-    return grouped, prenotato
-
+    return grouped, prenotato, prenotabile
 
 async def scrape_and_cache_daily():
-    """
-    Funzione principale: Login -> Ottieni Link -> Scrapa Menu -> Salva in Redis
-    """
     print("--- INIZIO SCRAPING GIORNALIERO ---")
     async with async_playwright() as p:
         # Usa headless=True in produzione (senza interfaccia grafica)
@@ -161,7 +169,7 @@ async def scrape_and_cache_daily():
         try:
             # 1. Login
             await login(page)
-            
+
             # 2. Ottieni URL per oggi e domani
             menu_urls = await get_menu_urls(page)
             # menu_urls struttura: [OggiLunch, OggiDinner, DomaniLunch, DomaniDinner]
@@ -192,12 +200,13 @@ async def scrape_and_cache_daily():
                     continue
                 
                 # 3. Parsing
-                dishes, prenotato = await parse_menu_page(page, url)
+                dishes, prenotato, prenotabile = await parse_menu_page(page, url)
                 
                 meal_data = {
                     "data": day_obj.isoformat(),
                     "tipo_pasto": tipo,
                     "prenotato": prenotato,
+                    "prenotabile": prenotabile,
                     "piatti": dishes
                 }
                 
