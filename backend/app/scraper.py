@@ -234,3 +234,128 @@ async def get_cached_menu(day: date):
     if not raw:
         return None
     return json.loads(raw)
+
+
+
+
+
+
+async def book_meal(page: Page, meal_url: str, dish_ids: List[str]) -> bool:
+    """
+    Esegue la prenotazione usando JavaScript diretto e gestendo il caricamento AJAX di Drupal.
+    """
+    print(f"Inizio prenotazione su: {meal_url}")
+    await page.goto(meal_url)
+    await page.wait_for_load_state("networkidle")
+    
+    # 1. Step START: "Vuoi prenotare?"
+    try:
+        await page.wait_for_selector("#edit-vuoi-prenotare", state="attached")
+        
+        check_script = """() => {
+            var el = document.querySelector('#edit-vuoi-prenotare');
+            if (el && !el.checked) {
+                el.click();
+                return true;
+            }
+            return false;
+        }"""
+        was_unchecked = await page.evaluate(check_script)
+        if was_unchecked:
+            print("Checkbox 'Vuoi prenotare' cliccato (via JS).")
+            
+    except Exception as e:
+        print(f"Errore Checkbox Start: {e}")
+        return False
+
+    # Clic su "Procedi >"
+    try:
+        await page.wait_for_selector("#edit-cards-next", state="attached")
+        await page.evaluate("() => document.querySelector('#edit-cards-next').click()")
+    except Exception as e:
+        print(f"Errore bottone Procedi 1: {e}")
+        return False
+    
+    # 2. Step TIPO MENU: Selezioniamo STANDARD
+    await page.wait_for_selector("#edit-tipologia-menu-standard", state="attached")
+    await page.evaluate("() => document.querySelector('#edit-tipologia-menu-standard').click()")
+    
+    # Clic su "Procedi >"
+    await page.wait_for_selector("#edit-cards-next", state="attached")
+    await page.evaluate("() => document.querySelector('#edit-cards-next').click()")
+    
+    # 3. Step SELEZIONE PIATTI
+    try:
+        await page.wait_for_selector("fieldset", state="attached")
+        await asyncio.sleep(0.5) 
+    except:
+        pass
+
+    print(f"Seleziono i piatti: {dish_ids}")
+    for dish_id in dish_ids:
+        js_script = f"""() => {{
+            var el = document.querySelector('input[type="radio"][value="{dish_id}"]');
+            if (el) {{
+                el.scrollIntoView();
+                el.click();
+                return true;
+            }} else {{
+                return false;
+            }}
+        }}"""
+        
+        found = await page.evaluate(js_script)
+        if found:
+            print(f" - Selezionato piatto ID: {dish_id}")
+        else:
+            print(f" - ATTENZIONE: Piatto ID {dish_id} non trovato nel DOM!")
+
+    # 4. Step ANTEPRIMA (Scatena l'AJAX)
+    print("Clicco su Anteprima...")
+    await page.wait_for_selector("#edit-actions-preview-next", state="attached")
+    await page.evaluate("() => document.querySelector('#edit-actions-preview-next').click()")
+    
+    # --- GESTIONE AJAX DRUPAL ---
+    
+    # Dopo aver cliccato Anteprima, il sito fa una chiamata AJAX e inietta il bottone "Invia".
+    # Dobbiamo aspettare che l'elemento con value="Invia" compaia nel DOM.
+    print("Attendo caricamento AJAX del bottone finale...")
+    
+    try:
+        # Aspettiamo fino a 15 secondi che appaia l'input con value="Invia"
+        # Usiamo il selettore CSS preciso per l'input (come visto nel tuo JSON)
+        submit_selector = 'input[value="Invia"]'
+        await page.wait_for_selector(submit_selector, state="attached", timeout=15000)
+        
+        # Un piccolo sleep extra per essere sicuri che i listener JS siano attivi
+        await asyncio.sleep(1)
+
+        # 5. Step CONFERMA FINALE (Invia)
+        print("Bottone Invia trovato! Clicco...")
+        
+        submit_script = """() => {
+            var btn = document.querySelector('input[value="Invia"]');
+            if (btn) {
+                btn.click();
+                return true;
+            }
+            return false;
+        }"""
+        clicked = await page.evaluate(submit_script)
+        
+        if clicked:
+            print("Prenotazione INVIATA (Click finale).")
+            # Attendiamo che il sito processi l'invio finale
+            await page.wait_for_load_state("networkidle")
+            
+            # Opzionale: Verificare il messaggio di successo finale "Prenotazione effettuata"
+            # Ma per ora ci basta sapere che il click è andato.
+            return True
+        else:
+            print("Errore: Impossibile cliccare il pulsante 'Invia'.")
+            return False
+
+    except Exception as e:
+        print(f"Errore durante l'attesa del bottone Invia (AJAX timeout?): {e}")
+        await page.screenshot(path="debug_ajax_fail.png")
+        return False
