@@ -200,6 +200,7 @@ async def book_meal(page: Page, meal_url: str, dish_ids: List[str]) -> bool:
     try:
         submit_selector = 'input[value="Invia"]'
         await page.wait_for_selector(submit_selector, state="attached", timeout=15000)
+        # Piccolo sleep per stabilità JS
         await asyncio.sleep(1)
 
         submit_script = """() => {
@@ -207,13 +208,22 @@ async def book_meal(page: Page, meal_url: str, dish_ids: List[str]) -> bool:
             if (btn) { btn.click(); return true; }
             return false;
         }"""
+        
+        # CLICCATO!
         if await page.evaluate(submit_script):
             print("Prenotazione INVIATA (Click finale).")
+            
+            # ATTESA DI SICUREZZA:
+            # Aspettiamo che la rete si calmi
             await page.wait_for_load_state("networkidle")
+            # E aggiungiamo 3 secondi brutali ma sicuri per essere certi che Drupal abbia finito
+            await asyncio.sleep(3)
+            
             return True
         else:
             print("Errore: Impossibile cliccare il pulsante 'Invia'.")
             return False
+            
     except Exception as e:
         print(f"Errore bottone Invia: {e}")
         return False

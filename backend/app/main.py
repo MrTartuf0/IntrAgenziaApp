@@ -84,39 +84,33 @@ async def read_menu_tomorrow():
 @app.post("/book")
 async def make_reservation_endpoint(request: BookingRequest):
     """
-    Endpoint ottimizzato: usa il browser globale, blocca immagini e usa un semaforo.
+    Endpoint ottimizzato: usa il browser globale ma SENZA blocco risorse per affidabilità.
     """
-    # Se il browser globale non è partito per qualche motivo, errore grave
     if not global_browser:
         raise HTTPException(status_code=500, detail="Browser service not available")
 
-    # USIAMO IL SEMAFORO: Se ci sono già 5 persone che prenotano, la 6^ aspetta qui.
     async with booking_semaphore:
         print(f"Inizio slot prenotazione per: {request.username}")
         
-        # Creiamo un contesto leggero dal browser globale
+        # Creiamo un contesto
         context = await global_browser.new_context(
              user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
         
-        # OTTIMIZZAZIONE: Blocchiamo immagini/font per questa pagina
-        await setup_optimized_page(page)
+        # RIMOZIONE: Non chiamiamo setup_optimized_page(page) qui.
+        # Lasciamo che la pagina carichi tutto per evitare problemi con script nascosti.
         
         try:
-            # 1. Login Inline (usando la pagina ottimizzata)
             print(f"Login per {request.username}...")
             await page.goto("https://intragenzia.adisu.umbria.it/user/login")
             await page.fill('input[name="name"]', request.username)
             await page.fill('input[name="pass"]', request.password)
             
-            # Usiamo wait_for_load_state invece di semplice click and pray
             async with page.expect_navigation():
                 await page.click('#edit-submit')
             
-            # Verifica Login
             if "user/login" in page.url:
-                 # Proviamo a vedere se c'è un messaggio d'errore
                  error_msg = "Credenziali non valide"
                  try:
                      div = page.locator(".messages.error")
@@ -125,7 +119,6 @@ async def make_reservation_endpoint(request: BookingRequest):
                  except: pass
                  raise HTTPException(status_code=401, detail=error_msg.strip())
 
-            # 2. Eseguiamo la prenotazione (usa la funzione robusta in scraper.py)
             success = await book_meal(page, request.meal_url, request.dish_ids)
             
             if success:
@@ -139,6 +132,5 @@ async def make_reservation_endpoint(request: BookingRequest):
             print(f"Exception during booking: {e}")
             raise HTTPException(status_code=500, detail=str(e))
         finally:
-            # IMPORTANTE: Chiudiamo sempre la pagina/contesto per liberare RAM
             await context.close()
             print(f"Fine slot prenotazione per: {request.username}")
