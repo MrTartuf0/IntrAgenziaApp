@@ -137,96 +137,188 @@ async def parse_menu_page(page: Page, url: str) -> tuple[Dict, bool, bool]:
 
 
 async def book_meal(page: Page, meal_url: str, dish_ids: List[str]) -> bool:
-    """Prenotazione robusta con JS, AJAX handling e attesa selettiva."""
-    print(f"Inizio prenotazione su: {meal_url}")
-    await page.goto(meal_url)
-    await page.wait_for_load_state("networkidle")
+    """Prenotazione con LOGGING AVANZATO, SCREENSHOT e gestione TAB."""
+    print(f"\n--- DEBUG START: Prenotazione su {meal_url} ---")
     
-    # 1. Start
     try:
-        await page.wait_for_selector("#edit-vuoi-prenotare", state="attached")
-        check_script = """() => {
-            var el = document.querySelector('#edit-vuoi-prenotare');
-            if (el && !el.checked) { el.click(); return true; }
-            return false;
-        }"""
-        if await page.evaluate(check_script):
-            print("Checkbox 'Vuoi prenotare' cliccato (via JS).")
-    except Exception as e:
-        print(f"Errore Checkbox Start: {e}")
-        return False
+        # 1. Navigazione
+        await page.goto(meal_url)
+        await page.wait_for_load_state("networkidle")
+        print(f"DEBUG: Pagina caricata. URL: {page.url}")
+        await page.screenshot(path="debug_1_page_loaded.png")
 
-    # Procedi 1
-    try:
-        await page.wait_for_selector("#edit-cards-next", state="attached")
-        await page.evaluate("() => document.querySelector('#edit-cards-next').click()")
-    except Exception as e:
-        print(f"Errore bottone Procedi 1: {e}")
-        return False
-    
-    # 2. Tipo Menu
-    await page.wait_for_selector("#edit-tipologia-menu-standard", state="attached")
-    await page.evaluate("() => document.querySelector('#edit-tipologia-menu-standard').click()")
-    
-    # Procedi 2
-    await page.wait_for_selector("#edit-cards-next", state="attached")
-    await page.evaluate("() => document.querySelector('#edit-cards-next').click()")
-    
-    # 3. Selezione Piatti
-    try:
-        await page.wait_for_selector("fieldset", state="attached")
-        await asyncio.sleep(0.5) 
-    except: pass
+        # Controllo Login scaduto
+        if "user/login" in page.url:
+             print("DEBUG: ERRORE - Redirect al login rilevato! Sessione scaduta?")
+             return False
 
-    print(f"Seleziono i piatti: {dish_ids}")
-    for dish_id in dish_ids:
-        js_script = f"""() => {{
-            var el = document.querySelector('input[type="radio"][value="{dish_id}"]');
-            if (el) {{ el.scrollIntoView(); el.click(); return true; }}
-            else {{ return false; }}
-        }}"""
-        if await page.evaluate(js_script):
-            print(f" - Selezionato piatto ID: {dish_id}")
-        else:
-            print(f" - ATTENZIONE: Piatto ID {dish_id} non trovato!")
+        # --- 1-BIS. APERTURA TAB PRENOTAZIONE (FIX UTENTE) ---
+        try:
+            # Cerchiamo il tab "Prenotazione". Il link ha href="#edit-group-prenotazione"
+            # Usiamo un selettore robusto che cerca il link che punta a quel div
+            tab_selector = 'a[href="#edit-group-prenotazione"]'
+            
+            # Verifichiamo se esiste
+            if await page.locator(tab_selector).count() > 0:
+                print("DEBUG: Tab 'Prenotazione' trovato. Provo a cliccarlo...")
+                await page.click(tab_selector)
+                # Piccola attesa per l'animazione del tab
+                await asyncio.sleep(0.5)
+                print("DEBUG: Tab 'Prenotazione' cliccato.")
+                await page.screenshot(path="debug_1bis_tab_clicked.png")
+            else:
+                print("DEBUG: Tab 'Prenotazione' NON trovato. Forse la pagina è già espansa?")
+        except Exception as e:
+            print(f"DEBUG: Errore non bloccante apertura Tab: {e}")
 
-    # 4. Anteprima
-    print("Clicco su Anteprima...")
-    await page.wait_for_selector("#edit-actions-preview-next", state="attached")
-    await page.evaluate("() => document.querySelector('#edit-actions-preview-next').click()")
+        # 2. Checkbox "Vuoi prenotare"
+        try:
+            # Attendiamo che la checkbox diventi visibile (dopo il click sul tab)
+            try:
+                await page.wait_for_selector("#edit-vuoi-prenotare", state="visible", timeout=3000)
+            except:
+                print("DEBUG: Checkbox non visibile entro 3s. Provo comunque a cliccarla via JS.")
+
+            # Usiamo JS per cliccare in modo sicuro
+            check_script = """() => {
+                var el = document.querySelector('#edit-vuoi-prenotare');
+                if (el) {
+                    if (!el.checked) { el.click(); }
+                    return true;
+                }
+                return false;
+            }"""
+            if await page.evaluate(check_script):
+                print("DEBUG: Checkbox 'Vuoi prenotare' attivata.")
+            else:
+                 print("DEBUG: Impossibile cliccare la checkbox (JS false).")
+                 
+                 # Debug extra: dump dei messaggi se fallisce
+                 error_msg = await page.locator(".messages.error").all_text_contents()
+                 if error_msg:
+                     print(f"DEBUG: Messaggi di errore in pagina: {error_msg}")
+                 await page.screenshot(path="debug_error_no_checkbox.png")
+                 return False
+
+        except Exception as e:
+            print(f"DEBUG: Eccezione Checkbox Start: {e}")
+            return False
+
+        # Procedi 1
+        try:
+            await page.wait_for_selector("#edit-cards-next", state="attached", timeout=5000)
+            await page.evaluate("() => document.querySelector('#edit-cards-next').click()")
+            print("DEBUG: Cliccato 'Procedi' (Step 1).")
+        except Exception as e:
+            print(f"DEBUG: Errore bottone Procedi 1: {e}")
+            await page.screenshot(path="debug_error_procedi1.png")
+            return False
     
-    # 5. Conferma (AJAX)
-    print("Attendo caricamento AJAX del bottone finale...")
-    try:
+        # 3. Tipo Menu (Gestione opzionale se c'è solo un menu)
+        try:
+            await page.wait_for_load_state("networkidle")
+            if await page.locator("#edit-tipologia-menu-standard").count() > 0:
+                await page.evaluate("() => document.querySelector('#edit-tipologia-menu-standard').click()")
+                print("DEBUG: Selezionato 'Menu Standard'.")
+                
+                await page.wait_for_selector("#edit-cards-next", state="attached", timeout=5000)
+                await page.evaluate("() => document.querySelector('#edit-cards-next').click()")
+                print("DEBUG: Cliccato 'Procedi' (Step 2).")
+            else:
+                print("DEBUG: Selezione tipologia menu non trovata (potrebbe essere implicita).")
+        except Exception as e:
+             print(f"DEBUG: Errore/Skip Step Tipo Menu: {e}")
+
+        # 4. Selezione Piatti
+        await page.wait_for_load_state("networkidle")
+        await asyncio.sleep(1) 
+        await page.screenshot(path="debug_2_dish_selection.png")
+        
+        print(f"DEBUG: ID Piatti richiesti: {dish_ids}")
+        
+        # --- DIAGNOSTICA PIATTI ---
+        visible_radios = page.locator("input[type='radio']")
+        count = await visible_radios.count()
+        print(f"DEBUG: Trovati {count} radio button totali nella pagina.")
+        
+        if count == 0:
+            print("DEBUG: ERRORE - Nessun piatto trovato!")
+
+        missing_dishes = []
+        for dish_id in dish_ids:
+            # Selezione JS
+            js_script = f"""() => {{
+                var el = document.querySelector('input[type="radio"][value="{dish_id}"]');
+                if (el) {{ 
+                    el.scrollIntoView(); 
+                    el.click(); 
+                    return true; 
+                }}
+                return false;
+            }}"""
+            if await page.evaluate(js_script):
+                print(f"DEBUG: ✅ Selezionato piatto {dish_id}")
+            else:
+                print(f"DEBUG: ⚠️ Trovato ma non cliccabile: {dish_id}")
+                missing_dishes.append(dish_id)
+
+        # 5. Anteprima
+        print("DEBUG: Tentativo click 'Anteprima'...")
+        try:
+            await page.wait_for_selector("#edit-actions-preview-next", state="attached", timeout=5000)
+            await page.evaluate("() => document.querySelector('#edit-actions-preview-next').click()")
+            print("DEBUG: Cliccato 'Anteprima'.")
+        except Exception as e:
+            print(f"DEBUG: Errore bottone Anteprima: {e}")
+            await page.screenshot(path="debug_error_preview.png")
+            return False
+        
+        # 6. Conferma Finale
+        print("DEBUG: Attendo caricamento pagina finale (bottone Invia)...")
+        await page.wait_for_load_state("networkidle")
+        await page.screenshot(path="debug_3_pre_submit.png")
+
         submit_selector = 'input[value="Invia"]'
-        await page.wait_for_selector(submit_selector, state="attached", timeout=15000)
-        # Piccolo sleep per stabilità JS
-        await asyncio.sleep(1)
+        try:
+            await page.wait_for_selector(submit_selector, state="attached", timeout=10000)
+        except:
+            print("DEBUG: Bottone 'Invia' NON comparso.")
+            errors = await page.locator(".messages.error").all_text_contents()
+            if errors:
+                print(f"DEBUG: Errori di validazione trovati: {errors}")
+            return False
 
+        # Click INVIA
         submit_script = """() => {
             var btn = document.querySelector('input[value="Invia"]');
             if (btn) { btn.click(); return true; }
             return false;
         }"""
         
-        # CLICCATO!
         if await page.evaluate(submit_script):
-            print("Prenotazione INVIATA (Click finale).")
-            
-            # ATTESA DI SICUREZZA:
-            # Aspettiamo che la rete si calmi
+            print("DEBUG: Cliccato 'Invia'. Attesa conferma...")
             await page.wait_for_load_state("networkidle")
-            # E aggiungiamo 3 secondi brutali ma sicuri per essere certi che Drupal abbia finito
-            await asyncio.sleep(3)
+            await asyncio.sleep(3) 
             
+            await page.screenshot(path="debug_4_success.png")
+            
+            if await page.locator(".messages.status").count() > 0:
+                 success_msg = await page.locator(".messages.status").first.text_content()
+                 print(f"DEBUG: Messaggio di successo: {success_msg}")
+            
+            print("--- DEBUG END: Successo (apparente) ---")
             return True
         else:
-            print("Errore: Impossibile cliccare il pulsante 'Invia'.")
+            print("DEBUG: Errore JS nel click 'Invia'.")
             return False
             
     except Exception as e:
-        print(f"Errore bottone Invia: {e}")
+        print(f"DEBUG: ECCEZIONE GENERALE BOOK_MEAL: {e}")
+        import traceback
+        traceback.print_exc()
+        await page.screenshot(path="debug_exception_crash.png")
         return False
+
 
 
 async def scrape_and_cache_daily():
